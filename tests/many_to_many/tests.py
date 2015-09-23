@@ -2,7 +2,7 @@ from __future__ import unicode_literals
 
 import threading
 
-from django.db import transaction
+from django.db import transaction, connection
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 from django.utils import six
 
@@ -462,5 +462,27 @@ class ManyToManyRaceConditionTests(ManyToManyTestsMixin, TransactionTestCase):
 
         @test_concurrently(10)
         def perform_request():
-            a5.publications.add(self.p1)
+            # a5.publications.add(self.p1)
+
+            with transaction.atomic():
+                cursor = connection.cursor()
+                cursor.execute('''
+                            INSERT INTO %(m2mtbl)s(%(lhs_id)s, %(rhs_id)s)
+                            (
+                              SELECT lhs_id, rhs_id
+                              FROM (values %(vals)s) AS tmp(lhs_id, rhs_id)
+                              LEFT JOIN %(m2mtbl)s
+                              ON %(m2mtbl)s.%(lhs_id)s = tmp.lhs_id
+                                and %(m2mtbl)s.%(rhs_id)s = tmp.rhs_id
+                              WHERE %(m2mtbl)s.id IS NULL
+                            );
+                        ''' % {
+                            'm2mtbl': 'many_to_many_article_publications',
+                            'lhs_id': '%s_id' % 'article',
+                            'rhs_id': '%s_id' % 'publication',
+                            'vals': '(%d,%d)' % (a5.pk, self.p1.pk),
+                        })
+
         perform_request()
+
+        self.assertEqual(a5.publications.count(), 1)
